@@ -1,0 +1,41 @@
+name: CI with Error Investigator
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        id: tests
+        run: |
+          set -o pipefail
+          pytest -q 2>&1 | tee test_output.log
+
+      - name: Capture error & call investigator
+        if: failure()
+        env:
+          INVESTIGATOR_URL: ${{ secrets.INVESTIGATOR_URL }} # e.g. https://your-host/investigate
+        run: |
+          ERROR_MSG=$(tail -n 50 test_output.log | sed 's/"/\\"/g')
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "error_message": "$ERROR_MSG",
+            "repo_slug": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "workflow_name": "${{ github.workflow }}",
+            "github_run_id": ${{ github.run_id }},
+            "ci_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }
+          EOF
+          )
+
+          curl -X POST "$INVESTIGATOR_URL" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
