@@ -9,10 +9,12 @@ from agents import set_default_openai_key
 from ..models.error_payload import ErrorInvestigationRequest
 from ..models.repo_activity_payload import RepoActivityRequest
 from ..models.daily_report_payload import DailyReportRequest
+from ..models.pr_risk_payload import PRRiskRequest
 from ..agent.investigator import (
     investigate_error,
     summarize_repo_activity,
     generate_daily_report,
+    analyze_pr_risk,
 )
 load_dotenv()
 
@@ -53,4 +55,12 @@ async def daily_report_endpoint(payload: DailyReportRequest):
     - Optional error investigation (if error_message provided)
     """
     result = await generate_daily_report(payload)
+    return JSONResponse(content=result)
+
+@app.post("/pr_risk")
+async def pr_risk_endpoint(payload: PRRiskRequest):
+    """
+    Analyze the risk profile of a specific pull request.
+    """
+    result = await analyze_pr_risk(payload)
     return JSONResponse(content=result)

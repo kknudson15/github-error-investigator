@@ -9,6 +9,7 @@ from .github_mcp import github_mcp_server
 from ..models.error_payload import ErrorInvestigationRequest
 from ..models.repo_activity_payload import RepoActivityRequest
 from ..models.daily_report_payload import DailyReportRequest
+from ..models.pr_risk_payload import PRRiskRequest
 
 
 def build_instructions() -> str:
@@ -83,6 +84,55 @@ def build_activity_instructions() -> str:
         Keep it high signal and concrete, with references to commit SHAs and PR numbers.
         """
     ).strip()
+
+def build_pr_risk_instructions() -> str:
+    return dedent(
+        """
+        You are a senior reviewer and production-readiness advisor.
+
+        Your job:
+        - Use the GitHub MCP tools to deeply analyze the risk profile of a given pull request.
+        - You should:
+          1. Fetch the pull request details (title, description, author, labels, status).
+          2. Inspect the diff: files changed, lines added/removed, key directories touched.
+          3. Look at related workflow runs for this PR (if available).
+          4. Look for linked issues, references, or related PRs.
+          5. Evaluate how risky this PR is to merge and why.
+
+        How to judge risk:
+        - Size and complexity of the diff.
+        - Criticality of the areas touched (core services, infra, pipelines, security).
+        - Changes to dependencies, environment, workflows, or configuration.
+        - Presence of migrations, refactors, or breaking changes.
+        - Test coverage (new tests added? existing tests modified?).
+        - History of failures in related areas.
+
+        Output:
+        - A Markdown report with:
+          - Overall risk rating (e.g., Low / Medium / High).
+          - Clear reasons for the rating.
+          - Specific files / components of concern.
+          - Suggested checks before merge (tests, reviewers, rollout plan).
+
+        Keep it concise but concrete and actionable.
+        """
+    ).strip()
+
+
+def create_pr_risk_agent(server) -> Agent:
+    """
+    Agent specialized in analyzing the risk of a single PR.
+    """
+    return Agent(
+        name="github-pr-risk-analyzer",
+        instructions=build_pr_risk_instructions(),
+        model="gpt-4.1-mini",
+        mcp_servers=[server],
+        model_settings=ModelSettings(
+            tool_choice="auto",
+            temperature=0.25,
+        ),
+    )
 
 
 def create_repo_activity_agent(server) -> Agent:
@@ -418,3 +468,95 @@ async def generate_daily_report(payload: DailyReportRequest) -> Dict[str, Any]:
     report_markdown = "\n\n".join([header, error_section, activity_section])
 
     return {"report_markdown": report_markdown}
+
+async def analyze_pr_risk(payload: PRRiskRequest) -> Dict[str, Any]:
+    """
+    Analyze the risk profile of a single pull request.
+
+    Returns:
+    - { "pr_risk_markdown": "<markdown analysis>" }
+    """
+    repo = payload.repo_slug
+    pr_number = payload.pr_number
+
+    user_prompt = dedent(
+        f"""
+        Analyze the risk of the following pull request.
+
+        Repository: {repo}
+        Pull request number: {pr_number}
+
+        Using the GitHub MCP tools, you should:
+        - Fetch PR metadata (title, description, author, labels, status).
+        - Inspect the diff: which files changed, how many lines added/removed,
+          which directories or subsystems are affected.
+        - Identify changes to dependencies, configuration, workflows, or infra.
+        - Check test-related files (unit/integration tests, CI config) to see
+          if coverage was added or modified.
+        - Look for workflow runs associated with this PR and whether they passed.
+        - Consider any linked issues or referenced PRs.
+
+        Return your answer in Markdown as:
+
+        ## Summary
+        - Overall risk rating: Low / Medium / High
+        - One or two lines explaining the rating.
+
+        ## Reasons for risk rating
+        - Bullet list of concrete reasons (e.g., core service touched,
+          large refactor, migration, dependency bump).
+
+        ## Key files / areas touched
+        - Bullet list of important files/directories and what changed.
+
+        ## Tests & workflows
+        - What tests or workflows cover this PR?
+        - Are there gaps or missing coverage?
+
+        ## Recommendations before merge
+        - Concrete steps: additional tests, reviewers, rollout strategy,
+          feature flags, canary deployment, etc.
+
+        Include the PR number and key file paths in your explanations.
+        """
+    ).strip()
+
+    async with github_mcp_server() as server:
+        agent = create_pr_risk_agent(server)
+
+        try:
+            result = await Runner.run(
+                agent,
+                user_prompt,
+                max_turns=20,
+            )
+            return {
+                "pr_risk_markdown": result.final_output,
+            }
+        except MaxTurnsExceeded:
+            fallback = dedent(
+                f"""
+                I attempted to analyze the risk of:
+
+                - Repository: `{repo}`
+                - Pull request: `#{pr_number}`
+
+                but I hit my internal step limit (too many back-and-forth steps
+                between the model and the GitHub MCP tools).
+
+                This usually means the GitHub MCP server isn't responding as expected
+                (e.g., auth, connectivity, or protocol issues).
+
+                Please verify:
+
+                - The GitHub MCP server / remote endpoint is reachable.
+                - `GITHUB_MCP_PAT` has the right scopes for this repo.
+                - The repo slug and PR number are correct.
+
+                Once those are confirmed, try again.
+                """
+            ).strip()
+
+            return {
+                "pr_risk_markdown": fallback,
+            }

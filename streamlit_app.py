@@ -46,8 +46,8 @@ with st.sidebar:
 
 st.divider()
 
-tab_investigate, tab_activity, tab_daily = st.tabs(
-    ["Error investigation", "Repo activity", "Daily report"]
+tab_investigate, tab_activity, tab_daily, tab_pr = st.tabs(
+    ["Error investigation", "Repo activity", "Daily report", "PR risk analysis"]
 )
 
 # --- Tab 1: Error investigation ---
@@ -157,3 +157,37 @@ with tab_daily:
                 st.markdown(resp.get("report_markdown", "_No report returned._"))
             except Exception as e:
                 st.error(f"Request failed: {e}")
+
+# --- Tab 4: PR risk analysis ---
+with tab_pr:
+    st.subheader("PR risk analysis")
+
+    repo_slug_pr = st.text_input(
+        "Repo slug (owner/repo)",
+        "kknudson15/Agentic_AI",
+        key="pr_repo",
+    )
+    pr_number_str = st.text_input(
+        "Pull request number",
+        "",
+        key="pr_number",
+        placeholder="e.g. 12",
+    )
+
+    if st.button("Analyze PR risk", type="primary", key="pr_button"):
+        if not pr_number_str.strip().isdigit():
+            st.error("Please enter a valid numeric PR number.")
+        else:
+            payload = {
+                "repo_slug": repo_slug_pr,
+                "pr_number": int(pr_number_str.strip()),
+            }
+
+            with st.spinner("Analyzing PR risk..."):
+                try:
+                    resp = call_api("/pr_risk", payload)
+                    st.markdown(
+                        resp.get("pr_risk_markdown", "_No PR analysis returned._")
+                    )
+                except Exception as e:
+                    st.error(f"Request failed: {e}")
